@@ -1,5 +1,6 @@
 #include <iostream>
 #include <random>
+#include <future>
 #include "TrafficLight.h"
 
 /* Implementation of class "MessageQueue" */
@@ -14,8 +15,8 @@ T MessageQueue<T>::receive()
     std::unique_lock<std::mutex> ulock(MsgQ_mtx);
     cv.wait(ulock, [this](){return !_queue.empty();});
 
-    T msg = std::move(_queue.front());
-    _queue.pop_front();
+    T msg = std::move(_queue.back());
+    _queue.pop_back();
     return msg;
 
 }
@@ -26,7 +27,7 @@ void MessageQueue<T>::send(T &&msg)
     // FP.4a : The method send should use the mechanisms std::lock_guard<std::mutex> 
     // as well as _condition.notify_one() to add a new message to the queue and afterwards send a notification.
     std::lock_guard<std::mutex> ulock(MsgQ_mtx);
-    _queue.emplace_back(std::move(msg));
+    _queue.push_back(std::move(msg));
     cv.notify_one();
 }
 
@@ -47,7 +48,8 @@ void TrafficLight::waitForGreen()
     // Once it receives TrafficLightPhase::green, the method returns.
 
     while(true){
-        TrafficLightPhase msg = _trafficMessages.receive();
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        TrafficLightPhase msg = _trafficMessages->receive();
         if(msg == TrafficLightPhase::green)
             return;
     }
@@ -74,25 +76,33 @@ void TrafficLight::cycleThroughPhases()
     // Also, the while-loop should use std::this_thread::sleep_for to wait 1ms between two cycles. 
         
     std::random_device dev;
-    std::mt19937 rng(dev());
-    std::uniform_int_distribution<std::mt19937::result_type> dist46(4,6);
-    auto cycle_time = dist46(rng);
+    std::mt19937 eng(dev());
+    std::uniform_int_distribution<> dist46(4,6);
+    auto cycle_time = dist46(eng);
 
-    high_resolution_clock::time_point t1;
-    high_resolution_clock::time_point t2 = high_resolution_clock::now();
+    //auto t1;
+    auto t2 = system_clock::now();
 
     while(true){
         
-        t1 = high_resolution_clock::now();
-        duration<double> time_span = abs(duration_cast<duration<double>>(t1-t2));
+        auto t1 = high_resolution_clock::now();
+        long time_span = duration_cast<seconds>(t1-t2).count();
         
-        if(time_span.count() == cycle_time){
-            _currentPhase = _currentPhase==red?green:red;
+        if(time_span >= cycle_time){
+            //_currentPhase = (_currentPhase==red?green:red);
+            if(_currentPhase == red)    
+                _currentPhase = green;
+            else
+                _currentPhase = red;
+            
             TrafficLightPhase cpy = _currentPhase;
-            _trafficMessages.send(std::move(cpy));
-            t2 = high_resolution_clock::now();
+            
+            auto workTask = std::async(std::launch::async, &MessageQueue<TrafficLightPhase>::send,_trafficMessages,std::move(cpy));
+            workTask.wait();
+            t2 = system_clock::now();
+            cycle_time = dist46(eng);
         }
-        std::this_thread::sleep_for(1ms);
+        std::this_thread::sleep_for(milliseconds(1));
     }
 
 
